@@ -14,7 +14,7 @@
         timeout: 3,
         a: "c"
     }| doAsync : key1 %>
-    <%test ./somefile ? {a:/test|a/gi} : "||" : !!key1 : undefined && key1 | doAsync %>
+    <%package.work ./somefile ? {a:/test|a/gi} : "||" : !!key1 : undefined && key1 | doAsync %>
     <%locals.a="you"%>
     <%-: {a:"fuck "}| get : "a"%>
 </body>

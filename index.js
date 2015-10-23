@@ -130,7 +130,7 @@ function filtered(js) {
  * @api private
  */
 
-var tagRegexp = /^([a-zA-Z\$_]*\S)\s/;
+var tagRegexp = /^([a-zA-Z\$_][^:\\\|\s]*)\s/;
 function taged(js) {
     //<% tag filename [? argument1 : argument2][| filter1 : arguments4filter1 ... |filter2... ]%>
     var tagMatch = js.trim().match(tagRegexp);
@@ -267,7 +267,6 @@ var parse = exports.parse = function(str, options){
 
             var checkTaged = taged(js);
             if(checkTaged){
-                console.log(checkTaged)
                 buf += "' + (" + line + "," + checkTaged + ") +  '";
                 js = "";
             }
