@@ -1,6 +1,6 @@
 {
   "name": "co.ejs",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "description": "using ejs@1.0 with co and powerful filters, filters fix some orginal bug (good with any var) and can be async by promise.",
   "main": "index.js",
   "scripts": {

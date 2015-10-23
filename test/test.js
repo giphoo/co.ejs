@@ -6,8 +6,6 @@ var co = require("co");
 var q = require("q");
 
 ejs.filters.doAsync = function(input, opt){
-    console.log(this)//===>locals
-    console.log(arguments);
     return q.delay(500).then(function(){
         return input + opt;
     })
@@ -15,12 +13,21 @@ ejs.filters.doAsync = function(input, opt){
 ejs.filters.doSync = function(input, opt){
     return input + opt;
 }
+
+ejs.tags.test = function(filename/*other arguments*/){
+    //do something...
+    console.log(arguments)
+    return filename;//value or promise
+}
+
 var start = Date.now();
-for(var i =0; i< 50 ; i++)
 co(function*(){
-    var result = yield ejs.renderFile(__dirname + "/test.ejs");
-    console.log("after", Date.now() - start);
-    //console.log(result)
+    //var result = yield ejs.renderFile(__dirname + "/test.ejs", {debug:true});
+    var parser = require("./test.ejs");
+    console.log("complie time:", Date.now() - start);
+    var result = yield parser({key1:"123"})
+    console.log("parse time:", Date.now() - start);
+    console.log(result)
 }).catch(function(e){
     console.log(e.stack)
 })

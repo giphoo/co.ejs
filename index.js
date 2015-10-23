@@ -18,7 +18,8 @@ var q = require("q")
     , extname = path.extname
     , join = path.join
     , fs = require('fs')
-    , read = q.nbind(fs.readFile, fs);
+    , read = q.nbind(fs.readFile, fs)
+    , readSync = fs.readFileSync.bind(fs)
 
 /**
  * Filters.
@@ -27,6 +28,13 @@ var q = require("q")
  */
 
 var filters = exports.filters = require('./lib/filters.js');
+
+/**
+ * tags.
+ *
+ * @type Object
+ */
+var tags = exports.tags = require("./lib/tags.js");
 
 /**
  * Intermediate js cache.
@@ -53,7 +61,14 @@ exports.clearCache = function(){
  * @return {String}
  * @api private
  */
-
+var filteredTemplate = _.template([
+    'yield filters.promisify(',
+        '_.get(filters, \'<%=filter.name%>\', _.get(locals.__proto__, \'<%=filter.name%>\')).call(',
+            'locals,',
+            '<%=js%><%=filter.argument.length ? \',\' : \'\'%><%=filter.argument.join(",")%>',
+        ')',
+    ')'
+].join(''));
 function filtered(js) {
     var splitors1 = js.substr(1).split("|");
     splitors1.forEach(function(splitor1, i){
@@ -69,11 +84,11 @@ function filtered(js) {
             if(input && j == 0 && !buf){
                 //->filters.name
                 result.push({
-                    name: splitor2,
+                    name: splitor2.trim(),
                     argument: []
                 });
             }else{
-                if(buf){
+                if(buf){//exists buf means that the last char is not splitor
                     if(j == 0){
                         //(..|xx)->argument
                         buf += "|";
@@ -85,7 +100,7 @@ function filtered(js) {
                 //result[result.length - 1].argument
                 buf += splitor2;
                 try{
-                    new Function("return " + buf);
+                    new GeneratorFunction("return " + buf);
                     if(input){
                         _.last(result).argument.push(buf);
                     }else{
@@ -98,9 +113,61 @@ function filtered(js) {
         })
     });
 
-    return result.reduce(function(js, filter){
-        return 'yield filters.promisify(filters.' + filter.name + '.call(locals, ' + js + (filter && filter.argument.length ? "," + filter.argument.join(",") : "") + '))';
-    }, input);
+    var str = result.reduce(function(js, filter){
+        return filteredTemplate({
+            js: js,
+            filter: filter
+        });
+    }, 'yield filters.promisify(' + input + ")");
+    return str;
+}
+
+/**
+ * Translate taged code into function calls.
+ *
+ * @param {String} js
+ * @return {String}
+ * @api private
+ */
+
+var tagRegexp = /^([a-zA-Z\$_]*\S)\s/;
+function taged(js) {
+    //<% tag filename [? argument1 : argument2][| filter1 : arguments4filter1 ... |filter2... ]%>
+    var tagMatch = js.trim().match(tagRegexp);
+    if(tagMatch){
+        var tagname = tagMatch[1];
+        if(_.get(exports.tags, tagname)){
+            var tagBuf = ''
+                ,tagFunc = "_.get(tags, '" + tagname + "')";
+            js = js.trim().replace(tagname, "").trim();
+            if(!js.match(/\||\?/)){//... filename%>
+                tagBuf = [
+                    'yield filters.promisify(',
+                        tagFunc,
+                        ".call(locals,",
+                            js,//=tagFilename
+                        ')',
+                    ')'
+                ].join("");
+            }else{//... filename [? argument1 : argument2][| filter1 : arguments4filter1 ... |filter2... ]%>
+                var tagFilename;
+                if(js.match(/[^\|]*\?/)){//exists arguments for tag function
+                    //filename ? arguments4tag ... | filter1 : arguments4filter1 ... |filter2...
+                    tagFilename = js.split("?")[0].trim();
+                    tagFunc += '.bind(locals,\'' + tagFilename + '\')|__proto__.exec : '
+                }else{//filename | filter1 : arguments4filter1 ... |filter2...
+                    tagFilename = js.split("|")[0].trim();
+                    tagFunc += '.call(locals,\'' + tagFilename + '\')'
+                }
+
+                //<tagFunc> [? argument1 : argument2]| filter1 : arguments4filter1 ... |filter2..
+                tagBuf = js.replace(new RegExp(tagFilename + '\\s*\\??'), tagFunc);
+                tagBuf = filtered(":" + tagBuf);
+            }
+            return tagBuf;
+        }
+    }
+    return "";
 }
 
 /**
@@ -146,7 +213,7 @@ function rethrow(err, str, filename, lineno){
  * @api public
  */
 
-var parse = exports.parse = co.wrap(function*(str, options){
+var parse = exports.parse = function(str, options){
     options = options || {};
     var open = options.open || exports.open || '<%'
         , close = options.close || exports.close || '%>'
@@ -155,7 +222,7 @@ var parse = exports.parse = co.wrap(function*(str, options){
         , buf = "";
 
     buf += 'var buf = [];';
-    if (false !== options._with) buf += '\nwith (locals || {}) { yield co(function* (){ ';
+    if (false !== options._with) buf += '\nwith (locals || {}) {';
     buf += '\n buf.push(\'';
 
     var lineno = 1;
@@ -191,7 +258,6 @@ var parse = exports.parse = co.wrap(function*(str, options){
 
             var js = str.substring(i, end)
                 , start = i
-                , include = null
                 , n = 0;
 
             if ('-' == js[js.length-1]){
@@ -199,14 +265,11 @@ var parse = exports.parse = co.wrap(function*(str, options){
                 consumeEOL = true;
             }
 
-            if (0 == js.trim().indexOf('include')) {
-                var name = js.trim().slice(7).trim();
-                if (!filename) throw new Error('filename option is required for includes');
-                var path = resolveInclude(name, filename);
-                include = yield read(path, 'utf8');
-                include = yield exports.parse(include, { filename: path, _with: false, open: open, close: close, compileDebug: compileDebug });
-                buf += "' + yield co(function*(){" + include + "}) + '";
-                js = '';
+            var checkTaged = taged(js);
+            if(checkTaged){
+                console.log(checkTaged)
+                buf += "' + (" + line + "," + checkTaged + ") +  '";
+                js = "";
             }
 
             while (~(n = js.indexOf("\n", n))) n++, lineno++;
@@ -237,10 +300,10 @@ var parse = exports.parse = co.wrap(function*(str, options){
         }
     }
 
-    if (false !== options._with) buf += "'); });\n} \nreturn buf.join('');";
+    if (false !== options._with) buf += "');\n} \nreturn buf.join('');";
     else buf += "');\nreturn buf.join('');";
     return buf;
-});
+};
 
 /**
  * Compile the given `str` of ejs into a `Function`.
@@ -251,13 +314,12 @@ var parse = exports.parse = co.wrap(function*(str, options){
  * @api public
  */
 
-var compile = exports.compile = co.wrap(function*(str, options){
+var compile = exports.compile = function(str, options){
     options = options || {};
     var escape = options.escape || utils.escape;
 
     var input = JSON.stringify(str)
         , compileDebug = options.compileDebug !== false
-        , client = options.client
         , filename = options.filename
             ? JSON.stringify(options.filename)
             : 'undefined';
@@ -268,13 +330,13 @@ var compile = exports.compile = co.wrap(function*(str, options){
             'var __stack = { lineno: 1, input: ' + input + ', filename: ' + filename + ' };',
             rethrow.toString(),
             'try {',
-            yield exports.parse(str, options),
+            exports.parse(str, options),
             '} catch (err) {',
             '  rethrow(err, __stack.input, __stack.filename, __stack.lineno);',
             '}'
         ].join("\n");
     } else {
-        str = yield exports.parse(str, options);
+        str = exports.parse(str, options);
     }
 
     if (options.debug) {
@@ -282,7 +344,7 @@ var compile = exports.compile = co.wrap(function*(str, options){
     }
 
     try {
-        var fn = new GeneratorFunction('locals, _, co, filters, escape, rethrow', str);
+        var fn = new GeneratorFunction('locals, _, co, filters, tags, escape, rethrow', str);
     } catch (err) {
         if ('SyntaxError' == err.name) {
             err.message += options.filename
@@ -292,10 +354,10 @@ var compile = exports.compile = co.wrap(function*(str, options){
         throw err;
     }
 
-    return function(locals){
-        return fn.call(options.scope, locals, _, co, filters, escape, rethrow);
+    return function(locals, scope){
+        return co(fn.bind(scope || options.scope, locals, _, co, filters, tags, escape, rethrow));
     }
-});
+};
 
 /**
  * Render the given `str` of ejs.
@@ -316,9 +378,9 @@ var compile = exports.compile = co.wrap(function*(str, options){
  * @api public
  */
 
-exports.render = co.wrap(function*(str, options){
-    var fn
-        , options = options || {};
+exports.render = function(str, options){
+    var fn;
+    options = options || {};
 
     if (options.cache) {
         if (options.filename) {
@@ -327,35 +389,34 @@ exports.render = co.wrap(function*(str, options){
             throw new Error('"cache" option requires "filename".');
         }
     } else {
-        fn = yield compile(str, options);
+        fn = compile(str, options);
     }
 
     options.__proto__ = options.locals;
-    return yield fn(options);
-});
+    return fn(options);
+};
 
 /**
  * Render an EJS file at the given `path` and callback `fn(err, str)`.
  *
  * @param {String} path
  * @param {Object|Function} options or callback
- * @param {Function} fn
  * @return {Promise}
  * @api public
  */
 
-exports.renderFile = co.wrap(function*(path, options){
+exports.renderFile = function(path, options){
     var key = path + ':string';
     options = options || {};
 
     options.filename = path;
 
     var str = options.cache
-        ? cache[key] || (cache[key] = yield read(path, 'utf8'))
-        : yield read(path, 'utf8');
+        ? cache[key] || (cache[key] = readSync(path, 'utf8'))
+        : readSync(path, 'utf8');
 
-    return yield exports.render(str, options);
-});
+    return exports.render(str, options);
+};
 
 /**
  * Resolve include `name` relative to `filename`.
@@ -376,5 +437,33 @@ function resolveInclude(name, filename) {
 // express support
 
 exports.__express = function(path, options, fn){
-    exports.renderFile(path, options).nodeify(fn);
+    options = options || {};
+
+    return q.try(function(){
+        if(options.locals) options.__proto__ = options.locals;
+        if(path) options.filename = path;
+
+        return require(options.filename)(options, options.scope);
+    }).nodeify(fn);
 };
+
+// require support
+
+require.extensions[".ejs"] = function(module, filepath){
+    var tempcontent = readSync(filepath, "utf8");
+    var parser = compile(tempcontent);
+
+    return module.exports = function(_locals, _scope){
+        var locals = {};//protect orginal
+        locals.__proto__ = {
+            exports: module.exports = module.exports || {},
+            module: module,
+            require: module.require.bind(module),
+            __dirname: dirname(filepath),
+            __filename: filepath
+        };
+
+        if(_locals) locals.__proto__.__proto__ = _locals;
+        return parser(locals, _scope);
+    };
+}

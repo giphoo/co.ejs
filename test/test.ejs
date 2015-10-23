@@ -5,7 +5,17 @@
   <title></title>
 </head>
 <body>
-    <%locals.a = "you"%>
-    <%=: {a:"fuck "}| get : "a" | doAsync : a : /a|b/gi%>
+<%
+    key1="fuck you";
+%>
+<%=__filename%>
+<%=__dirname%>
+    <% include ./include.ejs ? {
+        timeout: 3,
+        a: "c"
+    }| doAsync : key1 %>
+    <%test ./somefile ? {a:/test|a/gi} : "||" : !!key1 : undefined && key1 | doAsync %>
+    <%locals.a="you"%>
+    <%-: {a:"fuck "}| get : "a"%>
 </body>
 </html>
